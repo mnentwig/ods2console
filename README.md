@@ -1,6 +1,8 @@
 # ods2console
-Barebone sample code that traverses an open-office spreadsheet and dumps all contents to the console (multiple sheets!).
+Extracts the XML from an open-office spreadsheet (which is a .zip file internally), traverses the hierarchy and dumps contents from all sheets to the console
 
-Extremely basic, e.g. no quoting of commas or multiline strings. However, equations do work (values are written)
+Functionality is extremely basic, e.g. no quoting of commas or multiline strings. Intended as code template, not as command line utility.
 
-Includes tinyxml2, which comes under its own license.
+The only library dependency is ibz (-lz)
+
+Other libraries (tinyxml2, minizip from libz source) are included as source and come under their own license.

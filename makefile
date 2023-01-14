@@ -1,10 +1,8 @@
-all: run
-run:
-	g++ -Wall -o main.exe main.cpp
-# extract zip file to make contents.xml visible
-# UNIX: use unzip
-# MINGW: use unzip-mem
-# leading dash (-) suppresses command failure 
-	-unzip-mem -o sampleInput.ods
+all: main.exe
+main.exe:
+	g++ -g -Wall -o main.exe main.cpp minizip/ioapi.c minizip/unzip.c -lz
+test: main.exe
 	./main.exe
-.PHONY: run
+clean: 
+	rm -f main.exe
+.PHONY: main.exe test clean
