@@ -68,12 +68,13 @@ string stringifyTextPElem(const XMLNode* n) {
     return r;
 }
 
-XMLNode* safeFirstChildElem(XMLNode* e, const char* targetElem) {
+const XMLNode* safeFirstChildElem(const XMLNode* e, const char* targetElem) {
     e = e->FirstChildElement(targetElem);
     if (!e) throw runtime_error(string("XML element '") + targetElem + "' not found at expected location");
     return e;
 }
 
+// returns table row indexed by column number
 map<size_t, string> parseRow(const XMLElement* row) {
     assert(row);
     assert(row->Value() == string("table:table-row"));
@@ -105,6 +106,7 @@ map<size_t, string> parseRow(const XMLElement* row) {
     return r;
 }
 
+// returns map hierarchy for one table indexed by row number then column number
 map<size_t, map<size_t, string>> parseTable(const XMLElement* e) {
     assert(e);
     assert(e->Value() == string("table:table"));
@@ -119,7 +121,7 @@ map<size_t, map<size_t, string>> parseTable(const XMLElement* e) {
         const char* tnRowRep = row->Attribute("table:number-rows-repeated");
         if (tnRowRep != NULL)
             nRowRep = std::atol(tnRowRep);
-        nRowRep = nRowRep < 1000 ? nRowRep : 1;  // heuristic hack to fix format error
+        //        nRowRep = nRowRep < 1000 ? nRowRep : 1;  // heuristic hack to fix format error
 
         map<size_t, string> rowMap = parseRow(row);
         if (rowMap.size() > 0) {
@@ -148,7 +150,7 @@ map<string, map<size_t, map<size_t, string>>> ods2txt_sparse(const string& fname
     free(buf);
 
     // === locate first spreadsheet in XML hierarchy ===
-    XMLNode* e = &doc;
+    const XMLNode* e = &doc;
     e = safeFirstChildElem(e, "office:document-content");
     e = safeFirstChildElem(e, "office:body");
     e = safeFirstChildElem(e, "office:spreadsheet");
@@ -160,7 +162,7 @@ map<string, map<size_t, map<size_t, string>>> ods2txt_sparse(const string& fname
     while (table) {
         const char* tname = table->Attribute("table:name");
         if (!tname) throw runtime_error("no table name");
-        auto v = r.insert({tname, parseTable(table)});
+        const auto& v = r.insert({tname, parseTable(table)});
         assert(/*insertion succeeded*/ v.second);
         table = xmlNext(table);
     }  // while table
@@ -171,23 +173,28 @@ int main(void) {
     const string sepCol(",");
     const string sepRow("\n");
     map<string, map<size_t, map<size_t, string>>> bookData = ods2txt_sparse("sampleInput.ods");
-    for (auto& tableInBook : bookData) {
+
+    // === iterate over sheets ===
+    for (const auto& tableInBook : bookData) {
         const string& tableName = tableInBook.first;
-        map<size_t, map<size_t, string>>& tableData = tableInBook.second;
+        const map<size_t, map<size_t, string>>& tableData = tableInBook.second;
 
         cout << "$NEW_SHEET," << tableName << sepRow;
         size_t lastTerminatedIxRow = 0;
-        for (auto& rowInSheet : tableData) {
+
+        // === iterate over rows ===
+        for (const auto& rowInSheet : tableData) {
             size_t ixRow = rowInSheet.first;
-            map<size_t, string>& rowData = rowInSheet.second;
+            const map<size_t, string>& rowData = rowInSheet.second;
             if (rowData.size() < 1) continue;  // defer output of possibly trailing separators
 
             // === write row separators ===
             for (size_t ix = lastTerminatedIxRow; ix < ixRow; ++ix)
                 cout << sepRow;
             lastTerminatedIxRow = ixRow;
-
             size_t lastTerminatedIxCol = 0;
+
+            // === iterate over columns ===
             for (auto& cellInRow : rowData) {
                 size_t ixCol = cellInRow.first;
                 const string& cellText = cellInRow.second;
