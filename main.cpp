@@ -2,6 +2,7 @@
 #include <cstdlib>  // realloc
 #include <cstring>  // memcpy
 #include <iostream>
+#include <map>
 #include <stdexcept>
 #include <string>
 
@@ -9,7 +10,7 @@
 #include "tinyxml2/tinyxml2.cpp"
 
 using namespace tinyxml2;
-using std::runtime_error, std::string, std::cout, std::endl;
+using std::runtime_error, std::string, std::cout, std::endl, std::map;
 
 /* Loads "fileToExtract" from "zipfile". Returns buffer with contents or NULL, if failed.
    Use free() on buffer to deallocate.
@@ -44,12 +45,12 @@ char* unzipToBuf(const char* zipfile, const char* fileToExtract, int* length) {
 }
 
 //* traverse to next element of same type (name) e.g. table, row, cell in a spreadsheet */
-XMLElement* xmlNext(XMLElement* e) {
+const XMLElement* xmlNext(const XMLElement* e) {
     return e->NextSiblingElement(e->Value());
 }
 
 // converts text:p to a plain string, regardless of formatting (=> handles XML text children and text:span children with an XML text child)
-string stringifyTextPElem(XMLNode* n) {
+string stringifyTextPElem(const XMLNode* n) {
     assert(n);
     assert(n->Value() == string("text:p"));
     n = n->FirstChild();
@@ -67,10 +68,78 @@ string stringifyTextPElem(XMLNode* n) {
     return r;
 }
 
-int main(void) {
+XMLNode* safeFirstChildElem(XMLNode* e, const char* targetElem) {
+    e = e->FirstChildElement(targetElem);
+    if (!e) throw runtime_error(string("XML element '") + targetElem + "' not found at expected location");
+    return e;
+}
+
+map<size_t, string> parseRow(const XMLElement* row) {
+    assert(row);
+    assert(row->Value() == string("table:table-row"));
+
+    map<size_t, string> r;
+    // === locate first cell in XML hierarchy ===
+    const XMLElement* cell = row->FirstChildElement("table:table-cell");
+    size_t ixCol = 0;
+    while (cell) {
+        size_t nColRep = 1;
+        const char* tnColRep = cell->Attribute("table:number-columns-repeated");
+        if (tnColRep != NULL)
+            nColRep = std::atol(tnColRep);
+        //        nColRep = nColRep < 1000 ? nColRep : 1;  // heuristic hack to fix format error
+
+        // === extract value ===
+        const XMLElement* text = cell->FirstChildElement("text:p");
+        const string textContent = text ? stringifyTextPElem(text) : "";
+        if (textContent.size() > 0) {
+            for (size_t ix = 0; ix < nColRep; ++ix) {
+                auto v = r.insert({ixCol++, textContent});
+                assert(/*insertion succeeded */ v.second);
+            }
+        } else {
+            ixCol += nColRep;
+        }
+        cell = xmlNext(cell);
+    }  // while cell
+    return r;
+}
+
+map<size_t, map<size_t, string>> parseTable(const XMLElement* e) {
+    assert(e);
+    assert(e->Value() == string("table:table"));
+
+    map<size_t, map<size_t, string>> r;
+    // === locate first row in XML hierarchy ===
+    const XMLElement* row = e->FirstChildElement("table:table-row");
+    size_t ixRow = 0;
+    while (row) {
+        string rowOut;
+        size_t nRowRep = 1;
+        const char* tnRowRep = row->Attribute("table:number-rows-repeated");
+        if (tnRowRep != NULL)
+            nRowRep = std::atol(tnRowRep);
+        nRowRep = nRowRep < 1000 ? nRowRep : 1;  // heuristic hack to fix format error
+
+        map<size_t, string> rowMap = parseRow(row);
+        if (rowMap.size() > 0) {
+            for (size_t ixRowRep = 0; ixRowRep < nRowRep; ++ixRowRep) {
+                auto v = r.insert({ixRow++, rowMap});
+                assert(/*insertion succeeded*/ v.second);
+            }
+        } else {
+            ixRow += nRowRep;
+        }
+        row = xmlNext(row);
+    }  // while row
+    return r;
+}
+
+// returns map hierarchy indexed by sheet name/row number/column number
+map<string, map<size_t, map<size_t, string>>> ods2txt_sparse(const string& fname) {
     // === load XML from .ods (which is a zip file internally) ===
     int lengthOfXmlData;
-    char* buf = unzipToBuf("sampleInput.ods", "content.xml", &lengthOfXmlData);
+    char* buf = unzipToBuf(fname.c_str(), "content.xml", &lengthOfXmlData);
     if (!buf) throw runtime_error("unzip failed");
 
     // === load XML ===
@@ -79,64 +148,65 @@ int main(void) {
     free(buf);
 
     // === locate first spreadsheet in XML hierarchy ===
-    const char* targetElem = "office:document-content";
-    XMLElement* e = doc.FirstChildElement(targetElem);
-    if (!e) throw runtime_error(string("XML element '") + targetElem + "' not found at expected location");
+    XMLNode* e = &doc;
+    e = safeFirstChildElem(e, "office:document-content");
+    e = safeFirstChildElem(e, "office:body");
+    e = safeFirstChildElem(e, "office:spreadsheet");
+    const XMLElement* table = safeFirstChildElem(e, "table:table")->ToElement();
+    if (!table) throw runtime_error("document contains no tables!");
 
-    targetElem = "office:body";
-    e = e->FirstChildElement(targetElem);
-    if (!e) throw runtime_error(string("XML element '") + targetElem + "' not found at expected location");
+    map<string, map<size_t, map<size_t, string>>> r;
 
-    targetElem = "office:spreadsheet";
-    e = e->FirstChildElement(targetElem);
-    if (!e) throw runtime_error(string("XML element '") + targetElem + "' not found at expected location");
-
-    XMLElement* table = e->FirstChildElement("table:table");
-    if (!table) throw runtime_error("no table");  // need at least one
     while (table) {
         const char* tname = table->Attribute("table:name");
         if (!tname) throw runtime_error("no table name");
-        cout << "$NEW_SHEET," << tname << endl;
-
-        // === locate first row in XML hierarchy ===
-        XMLElement* row = table->FirstChildElement("table:table-row");
-        while (row) {
-            string rowOut;
-            size_t nRowRep = 1;
-            const char* tnRowRep = row->Attribute("table:number-rows-repeated");
-            if (tnRowRep != NULL)
-                nRowRep = std::atol(tnRowRep);
-            nRowRep = nRowRep < 1000 ? nRowRep : 1;  // heuristic hack to fix format error
-            for (size_t ixRowRep = 0; ixRowRep < nRowRep; ++ixRowRep) {
-                // === locate first cell in XML hierarchy ===
-                XMLElement* cell = row->FirstChildElement("table:table-cell");
-                while (cell) {
-                    size_t nColRep = 1;
-                    const char* tnColRep = cell->Attribute("table:number-columns-repeated");
-                    if (tnColRep != NULL)
-                        nColRep = std::atol(tnColRep);
-                    nColRep = nColRep < 1000 ? nColRep : 1;  // heuristic hack to fix format error
-
-                    // === extract value ===
-                    XMLElement* text = cell->FirstChildElement("text:p");
-                    const string textContent = text ? stringifyTextPElem(text) : "";
-                    for (size_t ix = 0; ix < nColRep; ++ix) {
-                        rowOut += textContent;
-                        rowOut += ",";
-                    }  // for nColRep
-                    cell = xmlNext(cell);
-                }  // while cell
-
-                // === remove trailing separators ===
-                while ((rowOut.size() > 0) && (rowOut.back() == ','))
-                    rowOut = rowOut.substr(0, rowOut.size() - 1);
-                cout << rowOut << endl;
-            }  // for ixRowRep
-            row = xmlNext(row);
-        }  // while row
+        auto v = r.insert({tname, parseTable(table)});
+        assert(/*insertion succeeded*/ v.second);
         table = xmlNext(table);
-        cout << "$END_SHEET" << endl;
     }  // while table
+    return r;
+}
+
+int main(void) {
+    const string sepCol(",");
+    const string sepRow("\n");
+    map<string, map<size_t, map<size_t, string>>> bookData = ods2txt_sparse("sampleInput.ods");
+    for (auto& tableInBook : bookData) {
+        const string& tableName = tableInBook.first;
+        map<size_t, map<size_t, string>>& tableData = tableInBook.second;
+
+        cout << "$NEW_SHEET," << tableName << sepRow;
+        size_t lastTerminatedIxRow = 0;
+        for (auto& rowInSheet : tableData) {
+            size_t ixRow = rowInSheet.first;
+            map<size_t, string>& rowData = rowInSheet.second;
+            if (rowData.size() < 1) continue;  // defer output of possibly trailing separators
+
+            // === write row separators ===
+            for (size_t ix = lastTerminatedIxRow; ix < ixRow; ++ix)
+                cout << sepRow;
+            lastTerminatedIxRow = ixRow;
+
+            size_t lastTerminatedIxCol = 0;
+            for (auto& cellInRow : rowData) {
+                size_t ixCol = cellInRow.first;
+                const string& cellText = cellInRow.second;
+                if (cellText.size() < 1) continue;  // defer output of possibly trailing separators
+
+                // === write column separators ===
+                for (size_t ix = lastTerminatedIxCol; ix < ixCol; ++ix)
+                    cout << sepCol;
+                lastTerminatedIxCol = ixCol;
+
+                // === write cell content ===
+                cout << cellText;
+            }
+            cout << sepRow;
+            lastTerminatedIxRow = ixRow;
+        }  // for rowInSheet
+
+        cout << "$END_SHEET" << sepRow;
+    }  // for table in sheet
 
     return 0;
 }
