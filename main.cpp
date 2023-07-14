@@ -142,11 +142,11 @@ map<string, map<size_t, map<size_t, string>>> ods2txt_sparse(const string& fname
     // === load XML from .ods (which is a zip file internally) ===
     int lengthOfXmlData;
     char* buf = unzipToBuf(fname.c_str(), "content.xml", &lengthOfXmlData);
-    if (!buf) throw runtime_error("unzip failed");
+    if (!buf) throw runtime_error(string("unzip failed for '") + fname + "'");
 
     // === load XML ===
     XMLDocument doc;
-    if (XML_SUCCESS != doc.Parse(buf, lengthOfXmlData)) throw runtime_error("loadfile failed");
+    if (XML_SUCCESS != doc.Parse(buf, lengthOfXmlData)) throw runtime_error(string("XML parse failed for content.xml in '") + fname);
     free(buf);
 
     // === locate first spreadsheet in XML hierarchy ===
@@ -169,10 +169,15 @@ map<string, map<size_t, map<size_t, string>>> ods2txt_sparse(const string& fname
     return r;
 }
 
-int main(void) {
+int main(int argc, const char** argv) {
     const string sepCol(",");
     const string sepRow("\n");
-    map<string, map<size_t, map<size_t, string>>> bookData = ods2txt_sparse("sampleInput.ods");
+
+    if (argc < 1) throw runtime_error("??? cmd line args: executable location is missing ???");
+    if (argc < 2) throw runtime_error("need one argument 'inputfile.ods' (openOffice spreadsheet)");
+    const char* fname = argv[1];
+
+    map<string, map<size_t, map<size_t, string>>> bookData = ods2txt_sparse(fname);
 
     // === iterate over sheets ===
     for (const auto& tableInBook : bookData) {
